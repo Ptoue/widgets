@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IRL Stream HUD v2</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: transparent;
+      font-family: 'Inter', -apple-system, sans-serif;
+      color: #ffffff;
+      padding: 12px;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* Pääpaneeli */
+    .hud-bar {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 12px;
+      padding: 8px 16px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+    }
+
+    .widget {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .label {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #94a3b8;
+      margin-bottom: 2px;
+    }
+
+    .value {
+      font-size: 15px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Värit */
+    .val-time    { color: #f8fafc; }
+    .val-steps   { color: #10b981; } /* Vihreä */
+    .val-speed   { color: #38bdf8; } /* Sininen */
+    .val-loc     { color: #c084fc; max-width: 220px; overflow: hidden; text-overflow: ellipsis; } /* Violetti */
+    .val-weather { color: #facc15; } /* Keltainen */
+    .val-net     { color: #fb923c; } /* Oranssi */
+    .val-bat     { color: #4ade80; } /* Vaaleanvihreä */
+    .val-sub     { color: #94a3b8; font-size: 11px; margin-left: 2px; font-weight: normal; }
+
+    .divider {
+      width: 1px;
+      height: 24px;
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    /* Askelikoni välähtää kun askel otetaan */
+    .step-bounce {
+      display: inline-block;
+      transition: transform 0.1s ease;
+    }
+    .stepped {
+      transform: scale(1.35);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="hud-bar">
+    
+    <!-- 1. Kello & Kesto -->
+    <div class="widget">
+      <span class="label">Aika / Kesto</span>
+      <span class="value val-time">
+        <span id="clock">--:--:--</span>
+        <span class="val-sub" id="timer">(00:00)</span>
+      </span>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- 2. Askeleet -->
+    <div class="widget">
+      <span class="label">Askeleet</span>
+      <span class="value val-steps">
+        <span class="step-bounce" id="step-icon">👟</span>
+        <span id="steps">0</span>
+      </span>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- 3. Nopeus & Matka -->
+    <div class="widget">
+      <span class="label">Nopeus / Matka</span>
+      <span class="value val-speed">
+        <span id="speed">0 km/h</span>
+        <span class="val-sub" id="distance">0.00 km</span>
+      </span>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- 4. Sijainti & Korkeus -->
+    <div class="widget">
+      <span class="label">Sijainti / Korkeus</span>
+      <span class="value val-loc">
+        📍 <span id="location">Haetaan...</span>
+        <span class="val-sub" id="altitude">-- m</span>
+      </span>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- 5. Sää -->
+    <div class="widget">
+      <span class="label">Sää</span>
+      <span class="value val-weather" id="weather">--°C</span>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- 6. Yhteys (Wi-Fi / 5G / Ping) -->
+    <div class="widget">
+      <span class="label">Yhteys</span>
+      <span class="value val-net" id="network">📶 Testataan...</span>
+    </div>
+
+    <div class="divider" id="bat-divider"></div>
+
+    <!-- 7. Akku -->
+    <div class="widget" id="bat-widget">
+      <span class="label">Akku</span>
+      <span class="value val-bat" id="battery">🔋 --%</span>
+    </div>
+
+  </div>
+
+  <script>
+    // ========================================================
+    // 1. KELLONAIKA & STRIIMIAIKA (TIMER)
+    // ========================================================
+    const streamStart = Date.now();
+    function updateClocks() {
+      const now = new Date();
+      document.getElementById('clock').textContent = now.toLocaleTimeString('fi-FI', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+
+      const secPassed = Math.floor((Date.now() - streamStart) / 1000);
+      const h = Math.floor(secPassed / 3600);
+      const m = Math.floor((secPassed % 3600) / 60);
+      const s = secPassed % 60;
+      const pad = n => String(n).padStart(2, '0');
+      document.getElementById('timer').textContent = h > 0 
+        ? `(${pad(h)}:${pad(m)}:${pad(s)})` 
+        : `(${pad(m)}:${pad(s)})`;
+    }
+    setInterval(updateClocks, 1000);
+    updateClocks();
+
+    // ========================================================
+    // 2. ASKELMITTARI (Kiihtyvyysanturi + Varajärjestelmä)
+    // ========================================================
+    let steps = parseInt(localStorage.getItem('hud_steps')) || 0;
+    const stepEl = document.getElementById('steps');
+    const stepIcon = document.getElementById('step-icon');
+    stepEl.textContent = steps.toLocaleString('fi-FI');
+
+    let sensorActive = false;
+    let lastStepTime = 0;
+    const STEP_THRESHOLD = 10.6; // Alhainen kynnys (herkkä reagoimaan liikkeeseen)
+    const MIN_STEP_MS = 280;
+
+    function triggerStep(count = 1) {
+      steps += count;
+      stepEl.textContent = steps.toLocaleString('fi-FI');
+      localStorage.setItem('hud_steps', steps);
+      
+      // Pieni visuaalinen animaatio askeleelle
+      stepIcon.classList.add('stepped');
+      setTimeout(() => stepIcon.classList.remove('stepped'), 120);
+    }
+
+    function handleMotion(e) {
+      const acc = e.accelerationIncludingGravity || e.acceleration;
+      if (!acc || acc.x === null) return;
+      
+      sensorActive = true;
+      const mag = Math.sqrt(acc.x * acc.x + acc.y * acc.y + acc.z * acc.z);
+      const now = Date.now();
+
+      if (mag > STEP_THRESHOLD && (now - lastStepTime) > MIN_STEP_MS) {
+        triggerStep(1);
+        lastStepTime = now;
+      }
+    }
+
+    // Käynnistetään anturi automaattisesti
+    window.addEventListener('devicemotion', handleMotion, true);
+
+    // Koko ruudun kosketuskuuntelija iOS-puhelimille (avaa sensoriluvat taustalla)
+    window.addEventListener('touchstart', () => {
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        DeviceMotionEvent.requestPermission().then(res => {
+          if (res === 'granted') window.addEventListener('devicemotion', handleMotion, true);
+        }).catch(() => {});
+      }
+    }, { once: true });
+
+    // ========================================================
+    // 3. GPS, NOPEUS, MATKA (KOHINASUODATETTU)
+    // ========================================================
+    let prevLat = null;
+    let prevLon = null;
+    let totalMeters = 0;
+    let lastWeatherTime = 0;
+    let stepDistanceResidual = 0;
+
+    // Etäisyyslaskuri metreinä kahden koordinaatin välillä (Haversine)
+    function getDistanceMeters(lat1, lon1, lat2, lon2) {
+      const R = 6371000;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+    }
+
+    if ('geolocation' in navigator) {
+      navigator.geolocation.watchPosition(
+        (pos) => {
+          const { latitude, longitude, speed, altitude, accuracy } = pos.coords;
+
+          // 1. NOPEUS JA KOHINASUODATIN
+          // Jos puhelin on paikallaan sisällä, GPS heittelee alle 2.5 km/h haamunopeuksia.
+          // Suodatetaan nämä pois:
+          let kmh = 0;
+          if (speed !== null && speed > 0.7) { // yli 2.5 km/h
+            kmh = Math.round(speed * 3.6);
+          }
+          document.getElementById('speed').textContent = `${kmh} km/h`;
+
+          // Korkeus
+          if (altitude !== null) {
+            document.getElementById('altitude').textContent = `${Math.round(altitude)} m`;
+          }
+
+          // 2. MATKAN KERTYMINEN
+          if (prevLat !== null && prevLon !== null) {
+            const distM = getDistanceMeters(prevLat, prevLon, latitude, longitude);
+
+            // Matkaa lisätään VAIN jos:
+            // - Siirtymä on yli 6 metriä (estää paikallaan heittelyn)
+            // - Tarkkuus on kohtuullinen (accuracy <= 35m)
+            // - Liikettä oikeasti on (kmh > 1 tai nopeussensori havaitsee liikkeen)
+            if (distM >= 6 && accuracy <= 35 && (kmh > 1 || (speed && speed > 0.4))) {
+              totalMeters += distM;
+              const km = (totalMeters / 1000).toFixed(2);
+              document.getElementById('distance').textContent = `${km} km`;
+
+              prevLat = latitude;
+              prevLon = longitude;
+
+              // 3. VARA-ASKELMITTARI (Jos kiihtyvyysanturi on estetty)
+              if (!sensorActive && kmh >= 1 && kmh <= 7) {
+                stepDistanceResidual += distM;
+                const gpsSteps = Math.floor(stepDistanceResidual / 0.76); // 1 askel ≈ 76 cm
+                if (gpsSteps > 0) {
+                  triggerStep(gpsSteps);
+                  stepDistanceResidual -= (gpsSteps * 0.76);
+                }
+              }
+            }
+          } else {
+            // Ensimmäinen mittauspiste
+            prevLat = latitude;
+            prevLon = longitude;
+          }
+
+          // Paikannus ja sää 5 min välein
+          const now = Date.now();
+          if (now - lastWeatherTime > 5 * 60 * 1000) {
+            fetchAccurateLocation(latitude, longitude);
+            fetchWeather(latitude, longitude);
+            lastWeatherTime = now;
+          }
+        },
+        (err) => console.warn('GPS Error:', err),
+        { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
+      );
+    }
+
+    // ========================================================
+    // 4. SIJAINTI (Kylä/Alue, Kaupunki)
+    // ========================================================
+    async function fetchAccurateLocation(lat, lon) {
+      try {
+        const res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=fi`);
+        const data = await res.json();
+        
+        const area = data.locality || '';
+        const city = data.city || data.principalSubdivision || '';
+
+        let text = 'Tuntematon';
+        if (area && city && area !== city) text = `${area}, ${city}`;
+        else if (city) text = city;
+        else if (area) text = area;
+
+        document.getElementById('location').textContent = text;
+      } catch (e) {
+        console.error('Sijaintivirhe:', e);
+      }
+    }
+
+    // ========================================================
+    // 5. SÄÄ (Open-Meteo)
+    // ========================================================
+    async function fetchWeather(lat, lon) {
+      try {
+        const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code`);
+        const data = await res.json();
+        const temp = Math.round(data.current.temperature_2m);
+        const icon = getWeatherIcon(data.current.weather_code);
+        document.getElementById('weather').textContent = `${icon} ${temp}°C`;
+      } catch (e) {
+        console.error('Säävirhe:', e);
+      }
+    }
+
+    function getWeatherIcon(code) {
+      if (code === 0) return '☀️';
+      if ([1, 2, 3].includes(code)) return '⛅';
+      if ([45, 48].includes(code)) return '🌫️';
+      if ([51, 53, 55, 61, 63, 65, 80, 81].includes(code)) return '🌧️';
+      if ([71, 73, 75, 77, 85, 86].includes(code)) return '🌨️';
+      if ([95, 96, 99].includes(code)) return '⛈️';
+      return '🌡️';
+    }
+
+    // ========================================================
+    // 6. YHTEYS: WI-FI / 5G / MOBIILI + REALIAIKAINEN PING
+    // ========================================================
+    async function checkNetworkQuality() {
+      const netEl = document.getElementById('network');
+      let typeLabel = 'Mobiili';
+
+      // Tarkistetaan onko laite Wi-Fi -verkossa
+      if (navigator.connection) {
+        if (navigator.connection.type === 'wifi') {
+          typeLabel = 'Wi-Fi';
+        } else if (navigator.connection.type === 'cellular') {
+          typeLabel = '5G/4G';
+        }
+      }
+
+      // Mitataan todellinen viive (ping ms)
+      const startPing = performance.now();
+      try {
+        await fetch('https://api.open-meteo.com/robots.txt?t=' + Date.now(), { mode: 'no-cors', cache: 'no-store' });
+        const pingMs = Math.round(performance.now() - startPing);
+        netEl.textContent = `📶 ${typeLabel} ${pingMs}ms`;
+      } catch (e) {
+        netEl.textContent = navigator.onLine ? `📶 ${typeLabel}` : '⚠️ Offline';
+      }
+    }
+    // Päivitetään yhteyden laatu 6 sekunnin välein
+    setInterval(checkNetworkQuality, 6000);
+    checkNetworkQuality();
+
+    // ========================================================
+    // 7. AKUN TILA
+    // ========================================================
+    if ('getBattery' in navigator) {
+      navigator.getBattery().then((battery) => {
+        function updateBat() {
+          const level = Math.round(battery.level * 100);
+          const icon = battery.charging ? '⚡' : '🔋';
+          document.getElementById('battery').textContent = `${icon} ${level}%`;
+        }
+        updateBat();
+        battery.addEventListener('levelchange', updateBat);
+        battery.addEventListener('chargingchange', updateBat);
+      });
+    } else {
+      // Piilotetaan akkuwidget laitteilla, jotka estävät sen (esim. iOS Safari)
+      document.getElementById('bat-widget').style.display = 'none';
+      document.getElementById('bat-divider').style.display = 'none';
+    }
+  </script>
+</body>
+</html>
